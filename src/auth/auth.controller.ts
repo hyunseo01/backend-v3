@@ -9,6 +9,7 @@ import { UpdatePasswordDto } from './dto/updatePassword.dto';
 import { RequestWithUser } from '../common/interfaces/request-with-user.interface';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/current-user.decorator';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 
 @ApiTags('인증')
 @Controller('auth')
@@ -49,5 +50,19 @@ export class AuthController {
   withdraw(@Req() req: RequestWithUser) {
     console.log('토큰에서 추출된 userId:', req.user.userId);
     return this.authService.withdraw(req.user.userId, req.user.role);
+  }
+
+  @Post('refresh')
+  @ApiOperation({ summary: 'Access token 재발급' })
+  async refreshAccessToken(@Body() dto: RefreshTokenDto) {
+    const newAccessToken = await this.authService.reissueAccessToken(
+      dto.refreshToken,
+    );
+    return {
+      message: 'Access token 재발급 성공',
+      data: {
+        accessToken: newAccessToken,
+      },
+    };
   }
 }

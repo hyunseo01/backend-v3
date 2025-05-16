@@ -21,6 +21,7 @@ import { SigninDto } from './dto/signin.dto';
 import { UpdatePasswordDto } from './dto/updatePassword.dto';
 import { Chat } from '../chats/entities/chats.entity';
 import { UserRole } from '../common/interfaces/user-role.type';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthService {
@@ -34,7 +35,23 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly trainerAssignService: TrainerAssignService,
     private readonly dataSource: DataSource,
+    private readonly configService: ConfigService,
   ) {}
+
+  generateAccessToken(payload: { sub: number; role: string }): string {
+    return this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('JWT_SECRET'),
+      expiresIn: this.configService.get<string>('JWT_EXPIRES_IN') ?? '3600s',
+    });
+  }
+
+  generateRefreshToken(payload: { sub: number; role: string }): string {
+    return this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      expiresIn:
+        this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '30d',
+    });
+  }
 
   async signupUser(dto: SignupUserDto) {
     try {
@@ -126,11 +143,18 @@ export class AuthService {
     if (!isMatch) throw new UnauthorizedException('비밀번호가 틀렸습니다.');
 
     const payload = { sub: account.id, role: account.role };
-    const token = await this.jwtService.signAsync(payload);
+
+    const accessToken = this.generateAccessToken(payload);
+    const refreshToken = this.generateRefreshToken(payload);
 
     return {
       message: '로그인 성공',
-      data: { accessToken: token, userId: account.id, role: account.role },
+      data: {
+        accessToken,
+        refreshToken,
+        userId: account.id,
+        role: account.role,
+      },
     };
   }
 
@@ -177,5 +201,28 @@ export class AuthService {
     await this.userRepository.save(user);
 
     return { message: '회원 탈퇴가 완료되었습니다.' };
+  }
+
+  reissueAccessToken(refreshToken: string): string {
+    try {
+      const payload = this.jwtService.verify<{ sub: number; role: string }>(
+        refreshToken,
+        {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        },
+      );
+
+      return this.generateAccessToken({
+        sub: payload.sub,
+        role: payload.role,
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error('리프레시 토큰 오류:', err.message);
+      }
+      throw new UnauthorizedException(
+        'Refresh token이 유효하지 않거나 만료되었습니다.',
+      );
+    }
   }
 }
