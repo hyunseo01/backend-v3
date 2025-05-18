@@ -9,7 +9,6 @@ import { Repository } from 'typeorm';
 import { Profile } from './entities/profile.entity';
 import { CreateProfileDto } from './dto/create-profile.dto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { randomUUID } from 'crypto';
 
 function createS3Client(): S3Client {
   return new S3Client({
@@ -71,8 +70,9 @@ export class ProfileService {
       mimetype: string;
     };
 
+    const timestamp = Date.now();
     const ext = file.originalname.split('.').pop() ?? 'jpg';
-    const key = `profiles/${userId}-${randomUUID()}.${ext}`;
+    const key = `profiles/${userId}-${timestamp}.${ext}`;
 
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_S3_BUCKET ?? '',

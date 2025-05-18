@@ -139,6 +139,12 @@ export class AuthService {
     });
     if (!account) throw new UnauthorizedException('이메일이 틀렸습니다.');
 
+    if (account.role !== dto.role) {
+      throw new UnauthorizedException(
+        `해당 계정은 ${account.role}입니다. ${dto.role} 페이지에서 로그인할 수 없습니다.`,
+      );
+    }
+
     const isMatch = await bcrypt.compare(dto.password, account.password);
     if (!isMatch) throw new UnauthorizedException('비밀번호가 틀렸습니다.');
 
@@ -203,19 +209,18 @@ export class AuthService {
     return { message: '회원 탈퇴가 완료되었습니다.' };
   }
 
-  reissueAccessToken(refreshToken: string): string {
+  async reissueAccessToken(refreshToken: string): Promise<string> {
     try {
       const payload = this.jwtService.verify<{ sub: number; role: string }>(
         refreshToken,
         {
-          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+          secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
         },
       );
 
-      return this.generateAccessToken({
-        sub: payload.sub,
-        role: payload.role,
-      });
+      return Promise.resolve(
+        this.generateAccessToken({ sub: payload.sub, role: payload.role }),
+      );
     } catch (err: unknown) {
       if (err instanceof Error) {
         console.error('리프레시 토큰 오류:', err.message);

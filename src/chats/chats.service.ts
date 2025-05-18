@@ -5,143 +5,28 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Chat } from './entities/chats.entity';
-import { Repository } from 'typeorm';
-import { Trainer } from '../trainer/entities/trainer.entity';
+import { Repository, DataSource } from 'typeorm';
 import { ChatRoomDto } from './dto/chat-room.dto';
-import { ChatMessageDto } from '../messages/dto/chat-message.dto';
+import { Trainer } from '../trainer/entities/trainer.entity';
 import { Message } from '../messages/entities/messages.entity';
-import { UserRole } from '../common/interfaces/user-role.type';
 import { formatDateForChat } from '../common/utils/formatDateForChat';
-
-type ChatWithExtras = Chat & {
-  lastMessage?: Message;
-  unreadCount?: number;
-};
+import { ChatMessageDto } from './dto/chat-message.dto';
 
 @Injectable()
 export class ChatsService {
   constructor(
     @InjectRepository(Chat)
     private readonly chatRepository: Repository<Chat>,
-    @InjectRepository(Trainer)
-    private readonly trainerRepository: Repository<Trainer>,
+
     @InjectRepository(Message)
     private readonly messageRepository: Repository<Message>,
+
+    @InjectRepository(Trainer)
+    private readonly trainerRepository: Repository<Trainer>,
+
+    private readonly dataSource: DataSource,
   ) {}
 
-  // [REST] 트레이너 전용 채팅방 리스트 조회
-  async getChatRoomsForTrainer(accountId: number): Promise<ChatRoomDto[]> {
-    const trainer = await this.trainerRepository.findOne({
-      where: { accountId },
-    });
-
-    if (!trainer) {
-      throw new NotFoundException('트레이너 정보를 찾을 수 없습니다.');
-    }
-
-    // 모든 채팅방 조회 + 최신 메시지 + 안 읽은 메시지 수 계산 포함
-    const chats = await this.chatRepository
-      .createQueryBuilder('chat')
-      .leftJoinAndSelect('chat.user', 'user')
-      .leftJoinAndSelect('user.account', 'account')
-      .leftJoin(
-        (qb) =>
-          qb
-            .select('message.chatId', 'chatId')
-            .addSelect('MAX(message.id)', 'lastMessageId')
-            .from(Message, 'message')
-            .groupBy('message.chatId'),
-        'lastMessageSub',
-        'lastMessageSub.chatId = chat.id',
-      )
-      .leftJoinAndSelect(
-        Message,
-        'lastMessage',
-        'lastMessage.id = lastMessageSub.lastMessageId',
-      )
-      .loadRelationCountAndMap(
-        'chat.unreadCount',
-        'chat.messages',
-        'unreadMessages',
-        (qb) =>
-          qb
-            .where('unreadMessages.isRead = false')
-            .andWhere('unreadMessages.senderId != :trainerAccountId', {
-              trainerAccountId: accountId,
-            }),
-      )
-      .where('chat.trainerId = :trainerId', { trainerId: trainer.id })
-      .orderBy('chat.updatedAt', 'DESC')
-      .getMany();
-
-    return (chats as ChatWithExtras[]).map((chat) => ({
-      chatId: chat.id,
-      userId: chat.user?.id || 0,
-      userName: chat.user?.account?.name || '알 수 없음',
-      lastMessage: chat.lastMessage?.content || null,
-      lastMessageAt: chat.lastMessage
-        ? formatDateForChat(chat.lastMessage.createdAt)
-        : null,
-      unreadCount: chat.unreadCount ?? 0,
-    }));
-  }
-
-  // [REST] 메시지 무한스크롤 조회
-  async getMessages(params: {
-    roomId: number;
-    cursor?: number;
-    limit: number;
-    accountId: number;
-    role: UserRole;
-  }): Promise<ChatMessageDto[]> {
-    const { roomId, cursor, limit, accountId, role } = params;
-
-    const chat = await this.chatRepository.findOne({
-      where: { id: roomId },
-    });
-
-    if (!chat) {
-      throw new NotFoundException('채팅방을 찾을 수 없습니다.');
-    }
-
-    if (
-      (role === 'user' && chat.userId !== null && chat.userId !== accountId) ||
-      (role === 'trainer' &&
-        chat.trainerId !== null &&
-        chat.trainerId !== accountId)
-    ) {
-      throw new ForbiddenException('해당 채팅방에 접근 권한이 없습니다.');
-    }
-
-    const query = this.messageRepository
-      .createQueryBuilder('message')
-      .where('message.chatId = :roomId', { roomId })
-      .orderBy('message.id', 'DESC')
-      .take(limit);
-
-    if (cursor) {
-      query.andWhere('message.id < :cursor', { cursor });
-    }
-
-    const messages = await query
-      .leftJoinAndSelect('message.sender', 'sender')
-      .getMany();
-
-    return messages.map((msg) => {
-      const role = msg.sender?.role;
-      const safeRole = role === 'user' || role === 'trainer' ? role : 'user';
-
-      return {
-        messageId: msg.id,
-        senderId: msg.senderId,
-        senderRole: safeRole,
-        content: msg.content,
-        createdAt: msg.createdAt,
-      };
-    });
-  }
-
-  // [WebSocket] 메시지 저장 (message.send 이벤트용)
   async saveMessage(params: {
     chatId: number;
     content: string;
@@ -150,47 +35,186 @@ export class ChatsService {
   }): Promise<Message> {
     const { chatId, content, senderId, isSystem = false } = params;
 
-    const chat = await this.chatRepository.findOneBy({ id: chatId });
-    if (!chat) throw new NotFoundException('채팅방을 찾을 수 없습니다.');
+    return await this.dataSource.transaction(async (manager) => {
+      const chat = await manager.findOne(Chat, { where: { id: chatId } });
+      if (!chat) {
+        throw new NotFoundException('채팅방을 찾을 수 없습니다.');
+      }
 
-    const message = this.messageRepository.create({
-      chatId,
-      content,
-      senderId,
-      isSystem,
-      isRead: false,
+      const message = manager.create(Message, {
+        chatId,
+        content,
+        senderId,
+        isSystem,
+        isRead: false,
+      });
+
+      const saved = await manager.save(Message, message);
+      await manager.update(Chat, { id: chatId }, { updatedAt: new Date() });
+
+      return saved;
     });
-
-    return await this.messageRepository.save(message);
   }
 
-  // [WebSocket] 채팅방에 연결된 유저/트레이너 조회 (message 전송 시 대상 판단용)
-  async getChatWithUsers(chatId: number): Promise<Chat> {
-    const chat = await this.chatRepository.findOne({
-      where: { id: chatId },
-      relations: ['user', 'user.account', 'trainer', 'trainer.account'],
-    });
-
-    if (!chat) throw new NotFoundException('채팅방을 찾을 수 없습니다.');
-    return chat;
-  }
-
-  //읽음 처리
   async markMessagesAsRead(params: {
     chatId: number;
     accountId: number;
     lastReadMessageId: number;
-  }): Promise<void> {
+  }): Promise<{ affectedMessages: number }> {
     const { chatId, accountId, lastReadMessageId } = params;
 
-    await this.messageRepository
+    const result = await this.messageRepository
       .createQueryBuilder()
       .update(Message)
       .set({ isRead: true })
       .where('chatId = :chatId', { chatId })
-      .andWhere('senderId != :accountId', { accountId }) // 상대방이 보낸 메시지만
+      .andWhere('senderId != :accountId', { accountId })
       .andWhere('id <= :lastReadMessageId', { lastReadMessageId })
       .andWhere('isRead = false')
       .execute();
+
+    return { affectedMessages: result.affected || 0 };
+  }
+
+  async getChatWithUsers(chatId: number): Promise<Chat> {
+    const chat = await this.chatRepository.findOne({
+      where: { id: chatId },
+      relations: ['user', 'user.account', 'trainer', 'trainer.account'],
+      cache: true,
+    });
+
+    if (!chat) {
+      throw new NotFoundException('채팅방을 찾을 수 없습니다.');
+    }
+
+    return chat;
+  }
+
+  async getChatRoomsForTrainer(accountId: number): Promise<ChatRoomDto[]> {
+    const trainer = await this.trainerRepository.findOne({
+      where: { accountId },
+      cache: true,
+    });
+
+    if (!trainer) {
+      throw new NotFoundException('트레이너 정보를 찾을 수 없습니다.');
+    }
+
+    const chatRooms = await this.chatRepository
+      .createQueryBuilder('chat')
+      .select(['chat.id', 'user.id', 'account.id', 'account.name'])
+      .leftJoin('chat.user', 'user')
+      .leftJoin('user.account', 'account')
+      .where('chat.trainerId = :trainerId', { trainerId: trainer.id })
+      .orderBy('chat.updatedAt', 'DESC')
+      .getMany();
+
+    const chatIds = chatRooms.map((chat) => chat.id);
+    if (chatIds.length === 0) return [];
+
+    const raw = await this.messageRepository
+      .createQueryBuilder('message')
+      .select('message.chatId', 'chatId')
+      .addSelect('MAX(message.id)', 'lastMessageId')
+      .where('message.chatId IN (:...chatIds)', { chatIds })
+      .groupBy('message.chatId')
+      .getRawMany();
+
+    const lastMessagesQuery = raw as {
+      chatId: number;
+      lastMessageId: number;
+    }[];
+
+    const lastMessageIds = lastMessagesQuery.map((row) => row.lastMessageId);
+
+    const lastMessages = await this.messageRepository
+      .createQueryBuilder('message')
+      .select([
+        'message.id',
+        'message.chatId',
+        'message.content',
+        'message.createdAt',
+      ])
+      .where('message.id IN (:...lastMessageIds)', { lastMessageIds })
+      .getMany();
+
+    const rawUnreadCounts = await this.messageRepository
+      .createQueryBuilder('message')
+      .select('message.chatId', 'chatId')
+      .addSelect('COUNT(*)', 'unreadCount')
+      .where('message.chatId IN (:...chatIds)', { chatIds })
+      .andWhere('message.isRead = false')
+      .andWhere('message.senderId != :accountId', { accountId })
+      .groupBy('message.chatId')
+      .getRawMany();
+
+    const unreadCountsQuery = rawUnreadCounts as {
+      chatId: string;
+      unreadCount: string;
+    }[];
+
+    return chatRooms.map((chat) => {
+      const lastMessage = lastMessages.find((msg) => msg.chatId === chat.id);
+      const unreadItem = unreadCountsQuery.find(
+        (item) => Number(item.chatId) === chat.id,
+      );
+
+      return {
+        chatId: chat.id,
+        userId: chat.user?.id ?? 0,
+        userName: chat.user?.account?.name ?? '알 수 없음',
+        lastMessage: lastMessage?.content ?? null,
+        lastMessageAt: lastMessage
+          ? formatDateForChat(lastMessage.createdAt)
+          : null,
+        unreadCount: unreadItem ? Number(unreadItem.unreadCount) : 0,
+      };
+    });
+  }
+
+  async getMessages(params: {
+    roomId: number;
+    accountId: number;
+    role: 'user' | 'trainer';
+    cursor?: number;
+    limit: number;
+  }): Promise<ChatMessageDto[]> {
+    const { roomId, accountId, role, cursor, limit } = params;
+
+    const chat = await this.chatRepository.findOne({ where: { id: roomId } });
+    if (!chat) throw new NotFoundException('채팅방이 존재하지 않습니다.');
+
+    const isParticipant =
+      (role === 'user' && chat.userId === accountId) ||
+      (role === 'trainer' && chat.trainerId === accountId);
+
+    if (!isParticipant) {
+      throw new ForbiddenException('이 채팅방에 접근할 수 없습니다.');
+    }
+
+    const query = this.messageRepository
+      .createQueryBuilder('message')
+      .where('message.chatId = :roomId', { roomId })
+      .orderBy('message.id', 'ASC')
+      .limit(limit);
+
+    if (cursor) {
+      query.andWhere('message.id > :cursor', { cursor });
+    }
+
+    const messages = await query.getMany();
+
+    return messages.map((m) => ({
+      messageId: m.id,
+      senderId: m.senderId,
+      senderRole:
+        m.senderId === chat.user?.accountId
+          ? 'user'
+          : m.senderId === chat.trainer?.accountId
+            ? 'trainer'
+            : 'user',
+      content: m.content,
+      createdAt: m.createdAt,
+    }));
   }
 }

@@ -13,63 +13,66 @@ import { Inject } from '@nestjs/common';
 import { ChatsService } from './chats.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { ReadMessageDto } from './dto/read-message.dto';
-import { extractUserFromSocket } from '../common/utils/extractUserFromSocket';
+import { extractUserFromSocket } from '../auth/utils/socket-auth.helper';
+import { ChatMessageDto } from '../messages/dto/chat-message.dto';
 
-@WebSocketGateway({
-  cors: {
-    origin: '*', // 배포 시 실제 도메인으로 제한할 것
-    credentials: true,
-  },
-})
+interface SocketWithAuth extends Socket {
+  data: {
+    accountId: number;
+    role: 'user' | 'trainer' | 'admin';
+  };
+}
+
+@WebSocketGateway({ namespace: '/chats', cors: true })
 export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   constructor(
-    private readonly chatService: ChatsService,
-    @Inject(JwtService)
-    private readonly jwtService: JwtService,
+    private readonly chatsService: ChatsService,
+    @Inject(JwtService) private readonly jwtService: JwtService,
   ) {}
 
-  // 클라이언트 연결 시 JWT 인증
-  handleConnection(client: Socket) {
+  handleConnection(client: SocketWithAuth) {
     try {
       const { accountId, role } = extractUserFromSocket(
         client,
         this.jwtService,
       );
-
       client.data.accountId = accountId;
       client.data.role = role;
-
-      console.log(`WebSocket 연결됨: ${accountId} (${role})`);
+      client.join(`user:${accountId}`);
+      console.log(`WebSocket 연결 성공: ${accountId} (${role})`);
     } catch (err) {
-      console.error('WebSocket 인증 실패:', err.message);
-      client.disconnect(); // 인증 실패 시 연결 차단
+      client.emit('auth.error', {
+        code: 401,
+        message: err instanceof Error ? err.message : 'WebSocket 인증 실패',
+      });
+      console.error('WebSocket 인증 실패:', err);
+      client.disconnect();
     }
   }
 
-  handleDisconnect(client: Socket) {
-    console.log(`WebSocket 연결 해제: ${client.data?.accountId}`);
+  handleDisconnect(client: SocketWithAuth) {
+    console.log(`WebSocket 연결 종료: ${client.data?.accountId}`);
   }
 
-  // 메시지 전송 처리
   @SubscribeMessage('message.send')
   async handleSendMessage(
     @MessageBody() dto: SendMessageDto,
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: SocketWithAuth,
   ): Promise<void> {
     const accountId = client.data.accountId;
-    const role = client.data.role;
+    const role = client.data.role as 'user' | 'trainer';
 
-    const saved = await this.chatService.saveMessage({
+    const saved = await this.chatsService.saveMessage({
       chatId: dto.chatId,
       content: dto.content,
       senderId: accountId,
-      isSystem: dto.isSystem || false,
+      isSystem: dto.isSystem ?? false,
     });
 
-    const payload = {
+    const payload: ChatMessageDto = {
       messageId: saved.id,
       senderId: saved.senderId,
       senderRole: role,
@@ -77,48 +80,73 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       createdAt: saved.createdAt,
     };
 
-    // 송신자에게 echo
     client.emit('message.receive', payload);
 
-    // 상대방에게 메시지 전송
-    const chat = await this.chatService.getChatWithUsers(dto.chatId);
-    const receiverAccountId =
-      accountId === chat.user.account.id
-        ? chat.trainer.account.id
-        : chat.user.account.id;
+    const chat = await this.chatsService.getChatWithUsers(dto.chatId);
+    const receiverId =
+      accountId === chat.user?.account?.id
+        ? chat.trainer?.account?.id
+        : chat.user?.account?.id;
 
-    for (const [_, socket] of this.server.sockets.sockets) {
-      if (socket.data?.accountId === receiverAccountId) {
-        socket.emit('message.receive', payload);
-      }
+    if (receiverId) {
+      this.server.to(`user:${receiverId}`).emit('message.receive', payload);
     }
 
-    // 메시지 전송 후 채팅방 목록 갱신 (트레이너든 유저든 동일)
-    const trainerAccountId = chat.trainer.account.id;
-
-    const updatedRoomList =
-      await this.chatService.getChatRoomsForTrainer(trainerAccountId);
-
-    for (const [_, socket] of this.server.sockets.sockets) {
-      if (socket.data?.accountId === trainerAccountId) {
-        socket.emit('roomList.update', updatedRoomList);
-      }
+    const trainerAccountId = chat.trainer?.account?.id;
+    if (trainerAccountId) {
+      const updatedRooms =
+        await this.chatsService.getChatRoomsForTrainer(trainerAccountId);
+      this.server
+        .to(`user:${trainerAccountId}`)
+        .emit('roomList.update', updatedRooms);
     }
   }
 
   @SubscribeMessage('message.read')
   async handleReadMessage(
     @MessageBody() dto: ReadMessageDto,
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: SocketWithAuth,
   ): Promise<void> {
     const accountId = client.data.accountId;
+    const role = client.data.role as 'user' | 'trainer';
 
-    await this.chatService.markMessagesAsRead({
+    const result = await this.chatsService.markMessagesAsRead({
       chatId: dto.chatId,
       accountId,
       lastReadMessageId: dto.lastReadMessageId,
     });
 
-    // 별도 응답은 없음 (읽음 표시 클라이언트에서 처리)
+    if (result.affectedMessages > 0) {
+      const chat = await this.chatsService.getChatWithUsers(dto.chatId);
+      const otherUserId =
+        accountId === chat.user?.account?.id
+          ? chat.trainer?.account?.id
+          : chat.user?.account?.id;
+
+      if (otherUserId) {
+        this.server.to(`user:${otherUserId}`).emit('message.readStatusUpdate', {
+          chatId: dto.chatId,
+          lastReadMessageId: dto.lastReadMessageId,
+          readBy: accountId,
+          readerRole: role,
+        });
+      }
+
+      if (chat.trainer?.account?.id) {
+        const trainerRooms = await this.chatsService.getChatRoomsForTrainer(
+          chat.trainer.account.id,
+        );
+        this.server
+          .to(`user:${chat.trainer.account.id}`)
+          .emit('roomList.update', trainerRooms);
+      }
+    }
+
+    client.emit('message.readConfirm', {
+      success: true,
+      chatId: dto.chatId,
+      lastReadMessageId: dto.lastReadMessageId,
+      affectedCount: result.affectedMessages,
+    });
   }
 }

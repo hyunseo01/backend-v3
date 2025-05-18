@@ -5,6 +5,10 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
+//배포시 에러해결용
+// import crypto from 'crypto';
+// (global as any).crypto = crypto;
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 

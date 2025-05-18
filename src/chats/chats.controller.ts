@@ -1,4 +1,11 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequestWithUser } from '../common/interfaces/request-with-user.interface';
@@ -25,16 +32,26 @@ export class ChatsController {
   @ApiOperation({ summary: '채팅 메시지 조회' })
   async getMessages(
     @Req() req: RequestWithUser,
-    @Query('roomId') roomId: number,
-    @Query('cursor') cursor?: number,
-    @Query('limit') limit = 20,
+    @Query('roomId') roomIdRaw: string,
+    @Query('cursor') cursorRaw?: string,
+    @Query('limit') limitRaw?: string,
   ) {
+    const roomId = Number(roomIdRaw);
+    const cursor = cursorRaw ? Number(cursorRaw) : undefined;
+    const limit = limitRaw ? Number(limitRaw) : 20;
+
+    if (isNaN(roomId) || limit <= 0) {
+      throw new BadRequestException(
+        'roomId 또는 limit 값이 유효하지 않습니다.',
+      );
+    }
+
     return this.chatService.getMessages({
-      roomId: Number(roomId),
-      cursor: cursor ? Number(cursor) : undefined,
-      limit: Number(limit),
+      roomId,
+      cursor,
+      limit,
       accountId: req.user.userId,
-      role: req.user.role,
+      role: req.user.role as 'user' | 'trainer',
     });
   }
 }

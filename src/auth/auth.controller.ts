@@ -55,14 +55,7 @@ export class AuthController {
   @Post('refresh')
   @ApiOperation({ summary: 'Access token 재발급' })
   async refreshAccessToken(@Body() dto: RefreshTokenDto) {
-    const newAccessToken = await this.authService.reissueAccessToken(
-      dto.refreshToken,
-    );
-    return {
-      message: 'Access token 재발급 성공',
-      data: {
-        accessToken: newAccessToken,
-      },
-    };
+    const token = await this.authService.reissueAccessToken(dto.refreshToken);
+    return { accessToken: token };
   }
 }
