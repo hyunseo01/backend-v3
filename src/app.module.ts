@@ -11,6 +11,8 @@ import { ChatsModule } from './chats/chats.module';
 import { MessagesModule } from './messages/messages.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { SchedulesModule } from './schedules/schedules.module';
+import { ReservationsModule } from './reservations/reservations.module';
 
 @Module({
   imports: [
@@ -40,6 +42,8 @@ import { AppService } from './app.service';
     NotificationsModule,
     ChatsModule,
     MessagesModule,
+    SchedulesModule,
+    ReservationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
