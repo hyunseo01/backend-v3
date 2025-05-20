@@ -35,6 +35,6 @@ export class Profile extends BaseTimeEntity {
   @Column({ nullable: true, type: 'text' })
   memo: string;
 
-  @Column({ nullable: true })
-  photoUrl: string;
+  @Column({ nullable: true, type: 'text' })
+  photoUrl: string | null;
 }
