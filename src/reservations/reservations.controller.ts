@@ -40,13 +40,17 @@ export class ReservationsController {
   }
   @Patch(':id/cancel')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('user')
-  @ApiOperation({ summary: '예약 취소 (유저 전용)' })
+  @Roles('user', 'trainer')
+  @ApiOperation({ summary: '예약 취소 (유저/트레이너)' })
   async cancelReservation(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: RequestWithUser,
   ): Promise<{ message: string }> {
-    await this.reservationsService.cancelReservation(id, req.user.userId);
+    await this.reservationsService.cancelReservation(
+      id,
+      req.user.userId,
+      req.user.role,
+    );
     return { message: '예약이 성공적으로 취소되었습니다.' };
   }
 
@@ -59,6 +63,24 @@ export class ReservationsController {
     @Req() req: RequestWithUser,
   ): Promise<GetMyReservationsResponseDto> {
     return this.reservationsService.getMyReservations(req.user.userId);
+  }
+
+  @Get('trainer/today')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('trainer')
+  @ApiOperation({ summary: '트레이너 오늘 예약 목록 조회' })
+  async getTrainerTodayReservations(
+    @Req() req: RequestWithUser,
+  ): Promise<{ message: string; data: TrainerReservationDto[] }> {
+    const today = new Date().toISOString().split('T')[0];
+    const data = await this.reservationsService.getTrainerReservations(
+      req.user.userId,
+      today,
+    );
+    return {
+      message: '트레이너 오늘 예약 목록 조회 성공',
+      data,
+    };
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

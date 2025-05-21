@@ -91,65 +91,64 @@ export class ReservationsService {
 
   async cancelReservation(
     reservationId: number,
-    userId: number,
+    accountId: number,
+    role: string,
   ): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       const reservationRepo = manager.getRepository(Reservation);
       const userRepo = manager.getRepository(User);
+      const trainerRepo = manager.getRepository(Trainer);
 
-      const user = await userRepo.findOneBy({ accountId: userId });
-      if (!user) throw new NotFoundException('회원 정보를 찾을 수 없습니다.');
+      const now = new Date();
+
+      const accountUser =
+        role === 'user'
+          ? await userRepo.findOneBy({ accountId })
+          : await trainerRepo.findOneBy({ accountId });
+
+      if (!accountUser)
+        throw new NotFoundException('회원 정보를 찾을 수 없습니다.');
 
       const reservation = await reservationRepo.findOne({
         where: { id: reservationId },
         relations: ['user', 'schedule'],
       });
 
-      if (!reservation) {
-        console.error('예약이 존재하지 않습니다.');
-        throw new NotFoundException('예약을 찾을 수 없습니다.');
-      }
+      if (!reservation) throw new NotFoundException('예약을 찾을 수 없습니다.');
 
-      if (!reservation.user) {
-        console.error('예약에 user가 연결되어 있지 않습니다.');
-        throw new BadRequestException('예약 정보에 유저 정보가 없습니다.');
-      }
+      const ownsReservation =
+        (role === 'user' && reservation.user.id === accountUser.id) ||
+        (role === 'trainer' &&
+          reservation.schedule.trainerId === accountUser.id);
 
-      if (!reservation.schedule) {
-        console.error('예약에 schedule이 연결되어 있지 않습니다.');
-        throw new BadRequestException('예약 정보에 스케줄 정보가 없습니다.');
-      }
+      if (!ownsReservation)
+        throw new ForbiddenException('해당 예약을 취소할 권한이 없습니다.');
 
-      console.log('예약 user.id:', reservation.user.id);
-      console.log('요청자 userId:', user.id);
-
-      if (reservation.user.id !== user.id) {
-        throw new ForbiddenException('자신의 예약만 취소할 수 있습니다.');
-      }
-
-      if (reservation.status !== 'confirmed') {
+      if (reservation.status !== 'confirmed')
         throw new BadRequestException('이미 취소되었거나 완료된 예약입니다.');
-      }
 
-      const now = new Date();
-      const dateStr = String(reservation.schedule.date);
-      const timeStr = reservation.schedule.startTime;
-      const reservationDateTime = new Date(`${dateStr}T${timeStr}`);
+      const dateStr =
+        typeof reservation.schedule.date === 'string'
+          ? reservation.schedule.date
+          : reservation.schedule.date.toISOString().split('T')[0];
 
-      const hoursDiff =
-        (reservationDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+      const start = new Date(`${dateStr}T${reservation.schedule.startTime}`);
+      const end = new Date(start.getTime() + 50 * 60 * 1000);
 
-      if (hoursDiff < 24) {
+      if (role === 'user' && now >= start)
         throw new BadRequestException(
           '예약 24시간 이전까지만 취소가 가능합니다.',
         );
-      }
+
+      if (role === 'trainer' && now >= end)
+        throw new BadRequestException('이미 종료된 예약은 취소할 수 없습니다.');
 
       reservation.status = 'cancelled';
-      reservation.user.ptCount += 1;
-
+      if (role === 'user') {
+        reservation.user.ptCount += 1;
+        await userRepo.save(reservation.user);
+      }
       await reservationRepo.save(reservation);
-      await userRepo.save(reservation.user);
     });
   }
 
@@ -159,46 +158,44 @@ export class ReservationsService {
     const user = await this.userRepository.findOneBy({ accountId });
     if (!user) throw new NotFoundException('회원 정보를 찾을 수 없습니다.');
 
-    const today = new Date();
-    const dateStr = today.toISOString().split('T')[0]; // 'YYYY-MM-DD'
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
 
     const reservations = await this.reservationRepository.find({
-      where: {
-        userId: user.id,
-        status: 'confirmed',
-      },
-      relations: ['schedule', 'schedule.trainer'],
+      where: { userId: user.id, status: 'confirmed' },
+      relations: ['schedule', 'schedule.trainer', 'schedule.trainer.account'],
       order: { schedule: { date: 'ASC', startTime: 'ASC' } },
     });
 
-    const todayList = [];
-    const upcomingList = [];
+    const today: ReservationInfoDto[] = [];
+    const upcoming: ReservationInfoDto[] = [];
 
     for (const res of reservations) {
-      const scheduleDate = String(res.schedule.date); // 문자열 변환
-      const isToday = scheduleDate === dateStr;
-      const todayList: ReservationInfoDto[] = [];
-      const upcomingList: ReservationInfoDto[] = [];
+      const dateStr =
+        typeof res.schedule.date === 'string'
+          ? res.schedule.date
+          : res.schedule.date.toISOString().split('T')[0];
+
+      const start = new Date(`${dateStr}T${res.schedule.startTime}`);
+      const end = new Date(start.getTime() + 50 * 60 * 1000);
+      const isInProgress = now >= start && now < end;
+      const isFinished = now >= end;
 
       const item: ReservationInfoDto = {
         reservationId: res.id,
         trainerName: res.schedule.trainer?.account?.name || '알 수 없음',
         date: String(res.schedule.date),
         time: res.schedule.startTime.slice(0, 5),
-        duration: 60,
+        duration: 50,
+        isInProgress,
+        isFinished,
       };
 
-      if (isToday) {
-        todayList.push(item);
-      } else if (scheduleDate > dateStr) {
-        upcomingList.push(item);
-      }
+      if (String(res.schedule.date) === todayStr) today.push(item);
+      else if (String(res.schedule.date) > todayStr) upcoming.push(item);
     }
 
-    return {
-      today: todayList,
-      upcoming: upcomingList,
-    };
+    return { today, upcoming };
   }
 
   async getTrainerReservations(
@@ -209,11 +206,13 @@ export class ReservationsService {
     if (!trainer)
       throw new NotFoundException('트레이너 정보를 찾을 수 없습니다.');
 
+    const now = new Date();
+
     const reservations = await this.reservationRepository.find({
       where: {
         status: 'confirmed',
         schedule: {
-          date: new Date(date), // 🔧 정확한 날짜 필터링
+          date: new Date(date),
           trainerId: trainer.id,
         },
       },
@@ -221,11 +220,25 @@ export class ReservationsService {
       order: { schedule: { startTime: 'ASC' } },
     });
 
-    return reservations.map((res) => ({
-      reservationId: res.id,
-      userName: res.user?.account?.name || '알 수 없음',
-      time: res.schedule.startTime.slice(0, 5),
-      duration: 60,
-    }));
+    return reservations.map((res) => {
+      const dateStr =
+        typeof res.schedule.date === 'string'
+          ? res.schedule.date
+          : res.schedule.date.toISOString().split('T')[0];
+
+      const start = new Date(`${dateStr}T${res.schedule.startTime}`);
+      const end = new Date(start.getTime() + 50 * 60 * 1000);
+      const isInProgress = now >= start && now < end;
+      const isFinished = now >= end;
+
+      return {
+        reservationId: res.id,
+        userName: res.user?.account?.name || '알 수 없음',
+        time: res.schedule.startTime.slice(0, 5),
+        duration: 50,
+        isInProgress,
+        isFinished,
+      };
+    });
   }
 }
