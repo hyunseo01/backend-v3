@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Trainer } from '../../trainer/entities/trainer.entity';
@@ -20,9 +20,7 @@ export class TrainerAssignService {
       .getMany();
 
     if (trainers.length === 0) {
-      throw new Error(
-        '등록된 트레이너가 없습니다. 회원가입을 진행할 수 없습니다.',
-      );
+      throw new BadRequestException('등록된 트레이너가 없습니다.');
     }
 
     // 모든 트레이너가 유저를 하나도 갖고 있지 않은 경우 → 랜덤 배정

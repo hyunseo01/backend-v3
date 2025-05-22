@@ -135,9 +135,12 @@ export class ReservationsService {
       const start = new Date(`${dateStr}T${reservation.schedule.startTime}`);
       const end = new Date(start.getTime() + 50 * 60 * 1000);
 
-      if (role === 'user' && now >= start)
+      if (
+        role === 'user' &&
+        now >= new Date(start.getTime() - 24 * 60 * 60 * 1000)
+      )
         throw new BadRequestException(
-          '예약 24시간 이전까지만 취소가 가능합니다.',
+          '예약 24시간 이전까지만 취소할 수 있습니다.',
         );
 
       if (role === 'trainer' && now >= end)

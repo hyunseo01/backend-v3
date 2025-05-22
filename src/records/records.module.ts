@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ExerciseModule } from './exercise/exercise.module';
 import { MealModule } from './meal/meal.module';
-import { RecordController } from './record.controller';
+import { RecordImageController } from './record.controller';
+import { RecordImageService } from './record.service';
 
 @Module({
   imports: [ExerciseModule, MealModule],
-  controllers: [RecordController],
+  controllers: [RecordImageController],
+  providers: [RecordImageService],
 })
 export class RecordsModule {}

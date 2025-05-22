@@ -5,7 +5,6 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { ExerciseCategory } from './exercise-category.entity';
 import { BaseTimeEntity } from '../../../common/entities/baseTime.entity';
 import { Account } from '../../../account/entities/account.entity';
 
@@ -14,26 +13,19 @@ export class ExerciseRecord extends BaseTimeEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Account, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'accountId' })
-  account: Account;
-
   @Column()
   accountId: number;
 
-  @ManyToOne(() => ExerciseCategory, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'categoryId' })
-  category: ExerciseCategory;
+  @Column({ type: 'date' })
+  date: string;
+
+  @Column({ type: 'text' })
+  memo: string;
 
   @Column({ nullable: true })
-  categoryId: number;
+  photoUrl: string;
 
-  @Column()
-  duration: number;
-
-  @Column()
-  intensity: number;
-
-  @Column({ type: 'date' })
-  date: Date;
+  @ManyToOne(() => Account)
+  @JoinColumn({ name: 'accountId' })
+  account: Account;
 }
