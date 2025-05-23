@@ -90,6 +90,13 @@ export class ProfileService {
       where: { userId: user.id },
     });
 
+    const trainer = user.trainerId
+      ? await this.trainerRepository.findOne({
+          where: { id: user.trainerId },
+          relations: ['account'],
+        })
+      : null;
+
     return {
       name: user.account.name,
       age: profile?.age ?? null,
@@ -97,6 +104,8 @@ export class ProfileService {
       height: profile?.height ?? null,
       weight: profile?.weight ?? null,
       memo: profile?.memo ?? null,
+      photoUrl: profile?.photoUrl ?? DEFAULT_PROFILE_IMAGE,
+      trainerName: trainer?.account.name ?? null,
     };
   }
 
