@@ -63,6 +63,7 @@ export class SchedulesService {
 
     //전체 고정 시간대 (점심시간 제외)
     const fullTimeSlots = [
+      '09:00:00',
       '10:00:00',
       '11:00:00',
       '13:00:00',
@@ -70,6 +71,9 @@ export class SchedulesService {
       '15:00:00',
       '16:00:00',
       '17:00:00',
+      '18:00:00',
+      '19:00:00',
+      '20:00:00',
     ];
 
     //해당 trainer + date 기준 예약된 시간 조회 (confirmed 상태만)

@@ -188,25 +188,40 @@ export class AuthService {
       throw new ForbiddenException('회원만 탈퇴할 수 있습니다.');
     }
 
-    const user = await this.userRepository.findOne({
-      where: { accountId },
-    });
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        const userRepo = manager.getRepository(User);
+        const accountRepo = manager.getRepository(Account);
 
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
+        const user = await userRepo.findOne({
+          where: { accountId },
+          relations: ['account'],
+        });
+
+        if (!user) {
+          throw new NotFoundException('사용자를 찾을 수 없습니다.');
+        }
+
+        // 탈퇴 처리
+        user.isDeleted = true;
+        user.ptCount = 0;
+        user.trainerId = null;
+        user.trainer = null;
+
+        user.account.name = '탈퇴한 회원';
+        user.account.email = `deleted_${accountId}@example.com`;
+
+        await accountRepo.save(user.account);
+        await userRepo.save(user);
+      });
+
+      return { message: '회원 탈퇴가 완료되었습니다.' };
+    } catch (err) {
+      console.error('회원 탈퇴 트랜잭션 실패:', err);
+      throw new InternalServerErrorException(
+        '회원 탈퇴 중 오류가 발생했습니다.',
+      );
     }
-
-    user.account.name = '탈퇴한 회원';
-    user.account.email = null;
-
-    user.isDeleted = true;
-    user.trainer = null;
-    user.trainerId = null;
-    user.ptCount = 0;
-
-    await this.userRepository.save(user);
-
-    return { message: '회원 탈퇴가 완료되었습니다.' };
   }
 
   async reissueAccessToken(refreshToken: string): Promise<string> {
