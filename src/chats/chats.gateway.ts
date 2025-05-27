@@ -74,6 +74,7 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const payload: ChatMessageDto = {
       messageId: saved.id,
+      chatId: saved.chatId,
       senderId: saved.senderId,
       senderRole: role,
       content: saved.content,
@@ -148,5 +149,14 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       lastReadMessageId: dto.lastReadMessageId,
       affectedCount: result.affectedMessages,
     });
+  }
+
+  @SubscribeMessage('join.room')
+  handleJoinRoom(
+    @MessageBody() data: { chatId: number },
+    @ConnectedSocket() client: SocketWithAuth,
+  ) {
+    client.join(`chat:${data.chatId}`);
+    console.log(`소켓 ${client.id} → chat:${data.chatId} 방 join`);
   }
 }

@@ -158,7 +158,7 @@ export class AuthService {
       data: {
         accessToken,
         refreshToken,
-        userId: account.id,
+        accountId: account.id,
         role: account.role,
       },
     };

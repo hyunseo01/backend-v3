@@ -24,5 +24,6 @@ import { TrainerAssignService } from '../common/services/trainer-assign.service'
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, TrainerAssignService],
+  exports: [JwtModule],
 })
 export class AuthModule {}

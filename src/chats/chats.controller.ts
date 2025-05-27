@@ -27,6 +27,13 @@ export class ChatsController {
     return this.chatService.getChatRoomsForTrainer(req.user.userId);
   }
 
+  @Get('my')
+  @Roles('user')
+  @ApiOperation({ summary: '유저 전용: 내 채팅방 ID 조회' })
+  async getMyChatRoom(@Req() req: RequestWithUser) {
+    return this.chatService.getChatRoomForUser(req.user.userId);
+  }
+
   @Get('messages')
   @Roles('user', 'trainer')
   @ApiOperation({ summary: '채팅 메시지 조회' })
